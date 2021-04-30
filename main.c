@@ -116,41 +116,26 @@ void PrintCommand(struct Command *command) {
                                    : "no");
 }
 
-int PrintArgsResult(char **argv) {
-    int i = 0;
-    int j = 0;
-    int k = 0;
-    int isValidCommand = 0;
-    const char *bad[] = {
-        "<",
-        ">",
-        "&",
-    };
-    char validCommands[3][10] = {
-      "ls",
-      "wc",
-      "blah"
-    };
-
-    while (argv[i]) {
-
-        for (j = 0; j < 3; j++) {
-            if (strcmp(argv[i], bad[j]) == 0) {
-                return 0;
-            }
+int PrintArgsResult(char **argv, int background) {
+    pid_t pid;
+    int status;
+    pid = fork();
+    if (pid == 0) {
+      // Child process
+      if (execvp(argv[0], argv) == -1) {
+        printf("%s: Command not found\n", argv[0]);
+      }
+      exit(EXIT_FAILURE);
+    } else if (pid < 0) {
+      // Error forking
+      perror("lsh");
+    } else {
+      // Parent process
+      do {
+        if (!background) {
+          waitpid(pid, &status, WUNTRACED);
         }
-
-        for (k = 0; k < 3; k++) {
-          if (strcmp(argv[i], bad[k]) == 0) {
-                isValidCommand = 1;
-            }
-        }
-
-        if (isValidCommand != 1) {
-          printf("%s: Command not found\n", argv[i]);
-          return 0;
-        }
-        i++;
+      } while (!WIFEXITED(status) && !WIFSIGNALED(status));
     }
     return 1;
 }
@@ -159,7 +144,7 @@ void PrintCommandResult(struct Command *command) {
 
   int subCmdIdx = 0;
   while (subCmdIdx < command->num_sub_commands) {
-      int isValid = PrintArgsResult(command->sub_commands[subCmdIdx].argv);
+      int isValid = PrintArgsResult(command->sub_commands[subCmdIdx].argv, command->background);
       if (isValid == 0) {
         return;
       }
@@ -183,6 +168,8 @@ int main(int argc, char **argv) {
         ReadCommand(buffer, command);
         ReadRedirectsAndBackground(command);
         PrintCommandResult(command);
+        printf("\n");
         PrintCommand(command);
+        printf("\n");
       }
 }
