@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #define MAX_SUB_COMMANDS 5
 #define MAX_ARGS 10
@@ -116,43 +117,119 @@ void PrintCommand(struct Command *command) {
                                    : "no");
 }
 
-int PrintArgsResult(char **argv, int background) {
+int PrintArgsResult(struct Command *command, int index, int type) {
     pid_t pid;
     int status;
-    pid = fork();
-    if (pid == 0) {
-      // Child process
-      if (execvp(argv[0], argv) == -1) {
-        printf("%s: Command not found\n", argv[0]);
-      }
-      exit(EXIT_FAILURE);
-    } else if (pid < 0) {
-      // Error forking
-      perror("lsh");
-    } else {
-      // Parent process
-      do {
-        if (!background) {
-          waitpid(pid, &status, WUNTRACED);
+    char **argv = command->sub_commands[index].argv;
+
+    if (type == 1) {
+      printf("STDIN CASE\n");
+      pid = fork();
+      if (pid == 0) {
+        // Child process
+        // What should I pass in here
+        if (execvp(argv[0], argv) == -1) {
+          printf("%s: Command not found\n", argv[0]);
         }
-      } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+        exit(EXIT_FAILURE);
+      } else if (pid < 0) {
+        // Error forking
+        perror("lsh");
+      } else {
+        // Parent process
+        do {
+          if (!command->background) {
+            waitpid(pid, &status, WUNTRACED);
+          }
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+      }
+    } else if (type == 2) {
+      printf("STDOUT CASE\n");
+      pid = fork();
+      if (pid == 0) {
+        // Child process
+        if (execvp(argv[0], argv) == -1) {
+          printf("%s: Command not found\n", argv[0]);
+        }
+        exit(EXIT_FAILURE);
+      } else if (pid < 0) {
+        // Error forking
+        perror("lsh");
+      } else {
+        // Parent process
+        do {
+          if (!command->background) {
+            waitpid(pid, &status, WUNTRACED);
+          }
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+      }
+    } else if (type == 3) {
+      printf("PIPE CASE\n");
+      pid = fork();
+      if (pid == 0) {
+        // Child process
+        if (execvp(argv[0], argv) == -1) {
+          printf("%s: Command not found\n", argv[0]);
+        }
+        exit(EXIT_FAILURE);
+      } else if (pid < 0) {
+        // Error forking
+        perror("lsh");
+      } else {
+        // Parent process
+        do {
+          if (!command->background) {
+            waitpid(pid, &status, WUNTRACED);
+          }
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+      }
+    } else {
+      printf("ELSE CASE\n");
+      pid = fork();
+      if (pid == 0) {
+        // Child process
+        if (execvp(argv[0], argv) == -1) {
+          printf("%s: Command not found\n", argv[0]);
+        }
+        exit(EXIT_FAILURE);
+      } else if (pid < 0) {
+        // Error forking
+        perror("lsh");
+      } else {
+        // Parent process
+        do {
+          if (!command->background) {
+            waitpid(pid, &status, WUNTRACED);
+          }
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+      }
     }
+
     return 1;
 }
 
 void PrintCommandResult(struct Command *command) {
 
-  int subCmdIdx = 0;
-  while (subCmdIdx < command->num_sub_commands) {
-      int isValid = PrintArgsResult(command->sub_commands[subCmdIdx].argv, command->background);
-      if (isValid == 0) {
-        return;
-      }
-      subCmdIdx++;
+  if (command->background) {
+    printf("[%d]\n", getpid());
   }
 
-  if (command->background == 1) {
-      printf("[%d]\n", getpid());
+  int subCmdIdx = 0;
+  while (subCmdIdx < command->num_sub_commands) {
+    if (command->stdin_redirect) {
+      PrintArgsResult(command, subCmdIdx, 1);
+      subCmdIdx++;
+    } else if (command->stdout_redirect) {
+      PrintArgsResult(command, subCmdIdx, 2);
+      subCmdIdx++;
+    } else if (command->num_sub_commands > 1) {
+      // Pipe Case
+      PrintArgsResult(command, subCmdIdx, 3);
+      subCmdIdx++;
+    } else {
+      PrintArgsResult(command, subCmdIdx, 4);
+      subCmdIdx++;
+    }
   }
 }
 
@@ -160,7 +237,14 @@ int main(int argc, char **argv) {
 
       while (1) {
         struct Command *command = malloc(sizeof(struct Command));
-        printf("$ ");
+        
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            printf("%s$ ", cwd);
+        } else {
+            perror("getcwd() error");
+            return 1;
+        }
         char *buffer;
         size_t bufsize = 32;
         size_t characters;
