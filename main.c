@@ -127,7 +127,7 @@ int PrintArgsResult(struct Command *command, int index, int type) {
       pid = fork();
       if (pid == 0) {
         // Child process
-        // What should I pass in here
+        freopen(command->stdin_redirect, "r", stdin);
         if (execvp(argv[0], argv) == -1) {
           printf("%s: Command not found\n", argv[0]);
         }
@@ -148,6 +148,7 @@ int PrintArgsResult(struct Command *command, int index, int type) {
       pid = fork();
       if (pid == 0) {
         // Child process
+        freopen(command->stdout_redirect, "w+", stdout);
         if (execvp(argv[0], argv) == -1) {
           printf("%s: Command not found\n", argv[0]);
         }
@@ -164,7 +165,17 @@ int PrintArgsResult(struct Command *command, int index, int type) {
         } while (!WIFEXITED(status) && !WIFSIGNALED(status));
       }
     } else if (type == 3) {
+
+      if (index == command->num_sub_commands - 1) {
+        return 1;
+      }
+
       printf("PIPE CASE\n");
+
+      // Do some type of loop over command->num_sub_commands
+
+
+
       pid = fork();
       if (pid == 0) {
         // Child process
