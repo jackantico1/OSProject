@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #define MAX_SUB_COMMANDS 5
 #define MAX_ARGS 10
@@ -88,10 +89,18 @@ void ReadRedirectsAndBackground(struct Command *command) {
                 command->background = strcmp(lastSubCmd->argv[i], "&") == 0 ? 1 : 0;
                 isBgDone = 1;
             } else if (isRedirectOutDone == 0 && strcmp(lastSubCmd->argv[i], ">") == 0) {
-                if (prevArg) command->stdout_redirect = strdup(prevArg);
+                if (prevArg) {
+                  command->stdout_redirect = strdup(prevArg);
+                  int argc = command->num_sub_commands;
+                  lastSubCmd->argv[argc - 2] = NULL;
+                }
                 isRedirectOutDone = 1;
             } else if (isRedirectInDone == 0 && strcmp(lastSubCmd->argv[i], "<") == 0) {
-                if (prevArg) command->stdin_redirect = strdup(prevArg);
+                if (prevArg) {
+                  command->stdin_redirect = strdup(prevArg);
+                  int argc = command->num_sub_commands;
+                  lastSubCmd->argv[argc - 2] = NULL;
+                }
                 isRedirectInDone = 1;
             }
             prevArg = lastSubCmd->argv[i];  // track the previous argument
@@ -117,108 +126,6 @@ void PrintCommand(struct Command *command) {
                                    : "no");
 }
 
-int PrintArgsResult(struct Command *command, int index, int type) {
-    pid_t pid;
-    int status;
-    char **argv = command->sub_commands[index].argv;
-
-    if (type == 1) {
-      printf("STDIN CASE\n");
-      pid = fork();
-      if (pid == 0) {
-        // Child process
-        freopen(command->stdin_redirect, "r", stdin);
-        if (execvp(argv[0], argv) == -1) {
-          printf("%s: Command not found\n", argv[0]);
-        }
-        exit(EXIT_FAILURE);
-      } else if (pid < 0) {
-        // Error forking
-        perror("lsh");
-      } else {
-        // Parent process
-        do {
-          if (!command->background) {
-            waitpid(pid, &status, WUNTRACED);
-          }
-        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-      }
-    } else if (type == 2) {
-      printf("STDOUT CASE\n");
-      pid = fork();
-      if (pid == 0) {
-        // Child process
-        freopen(command->stdout_redirect, "w+", stdout);
-        if (execvp(argv[0], argv) == -1) {
-          printf("%s: Command not found\n", argv[0]);
-        }
-        exit(EXIT_FAILURE);
-      } else if (pid < 0) {
-        // Error forking
-        perror("lsh");
-      } else {
-        // Parent process
-        do {
-          if (!command->background) {
-            waitpid(pid, &status, WUNTRACED);
-          }
-        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-      }
-    } else if (type == 3) {
-
-      if (index == command->num_sub_commands - 1) {
-        return 1;
-      }
-
-      printf("PIPE CASE\n");
-
-      // Do some type of loop over command->num_sub_commands
-
-
-
-      pid = fork();
-      if (pid == 0) {
-        // Child process
-        if (execvp(argv[0], argv) == -1) {
-          printf("%s: Command not found\n", argv[0]);
-        }
-        exit(EXIT_FAILURE);
-      } else if (pid < 0) {
-        // Error forking
-        perror("lsh");
-      } else {
-        // Parent process
-        do {
-          if (!command->background) {
-            waitpid(pid, &status, WUNTRACED);
-          }
-        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-      }
-    } else {
-      printf("ELSE CASE\n");
-      pid = fork();
-      if (pid == 0) {
-        // Child process
-        if (execvp(argv[0], argv) == -1) {
-          printf("%s: Command not found\n", argv[0]);
-        }
-        exit(EXIT_FAILURE);
-      } else if (pid < 0) {
-        // Error forking
-        perror("lsh");
-      } else {
-        // Parent process
-        do {
-          if (!command->background) {
-            waitpid(pid, &status, WUNTRACED);
-          }
-        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-      }
-    }
-
-    return 1;
-}
-
 void PrintCommandResult(struct Command *command) {
 
   if (command->background) {
@@ -227,20 +134,65 @@ void PrintCommandResult(struct Command *command) {
 
   int subCmdIdx = 0;
   while (subCmdIdx < command->num_sub_commands) {
-    if (command->stdin_redirect) {
-      PrintArgsResult(command, subCmdIdx, 1);
-      subCmdIdx++;
-    } else if (command->stdout_redirect) {
-      PrintArgsResult(command, subCmdIdx, 2);
-      subCmdIdx++;
-    } else if (command->num_sub_commands > 1) {
-      // Pipe Case
-      PrintArgsResult(command, subCmdIdx, 3);
-      subCmdIdx++;
-    } else {
-      PrintArgsResult(command, subCmdIdx, 4);
-      subCmdIdx++;
+
+    pid_t pid;
+    int status;
+    char **argv = command->sub_commands[subCmdIdx].argv;
+    char **argv2;
+
+    if (command->num_sub_commands > 1) {
+      if (subCmdIdx < command->num_sub_commands - 1) {
+        argv = command->sub_commands[command->num_sub_commands - subCmdIdx - 1].argv;
+        argv2 = command->sub_commands[command->num_sub_commands - subCmdIdx - 2].argv;
+      }
     }
+    // Should I do check for Pipe here?
+    int fds[2];
+    int err = pipe(fds);
+    if (err == -1) {
+      perror("pipe");
+      return; 
+    }
+
+    pid = fork();
+    if (pid == 0) {
+      if (command->stdin_redirect) {
+        open(command->stdin_redirect, O_RDONLY);
+      }
+      if (command->stdout_redirect) {
+        open(command->stdout_redirect, O_WRONLY | O_CREAT | O_TRUNC);
+      }
+
+      close(fds[1]);
+      close(0);
+      dup(fds[0]);
+
+      if (execvp(argv[0], argv) == -1) {
+        printf("%s: Command not found\n", argv[0]);
+      }
+      exit(EXIT_FAILURE);
+    } else if (pid < 0) {
+      // Error forking
+      perror("lsh");
+    } else {
+      
+      if (command->num_sub_commands > 1) {
+        if (subCmdIdx < command->num_sub_commands - 1) {
+          close(fds[0]);
+          close(1);
+          dup(fds[1]);
+          execvp(argv2[0], argv2);
+        }
+      }
+
+      do {
+        if (!command->background) {
+          waitpid(pid, &status, WUNTRACED);
+        }
+      } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+    }
+    subCmdIdx++;
+
   }
 }
 
@@ -262,9 +214,9 @@ int main(int argc, char **argv) {
         characters = getline(&buffer, &bufsize, stdin);
         ReadCommand(buffer, command);
         ReadRedirectsAndBackground(command);
-        PrintCommandResult(command);
         printf("\n");
         PrintCommand(command);
         printf("\n");
+        PrintCommandResult(command);
       }
 }
