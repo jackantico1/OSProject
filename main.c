@@ -72,41 +72,37 @@ void ReadCommand(char *line, struct Command *command) {
 }
 
 void ReadRedirectsAndBackground(struct Command *command) {
-    if (command->num_sub_commands == 0)
-        return;
-    int lastSubCmdIdx = command->num_sub_commands - 1;
-    struct SubCommand *lastSubCmd = &(command->sub_commands[lastSubCmdIdx]);
+  command->stdin_redirect = NULL;
+  command->stdout_redirect = NULL;
+  command->background = 0;
 
-    int i = MAX_ARGS - 1;
-    int isBgDone = 0;
-    int isRedirectInDone = 0;
-    int isRedirectOutDone = 0;
+  if (!command->num_sub_commands)
+    return;
 
-    char *prevArg;
-    while (i >= 0) {
-        if (lastSubCmd->argv[i]) {
-            if (isBgDone == 0) {
-                command->background = strcmp(lastSubCmd->argv[i], "&") == 0 ? 1 : 0;
-                isBgDone = 1;
-            } else if (isRedirectOutDone == 0 && strcmp(lastSubCmd->argv[i], ">") == 0) {
-                if (prevArg) {
-                  command->stdout_redirect = strdup(prevArg);
-                  int argc = command->num_sub_commands;
-                  lastSubCmd->argv[argc - 2] = NULL;
-                }
-                isRedirectOutDone = 1;
-            } else if (isRedirectInDone == 0 && strcmp(lastSubCmd->argv[i], "<") == 0) {
-                if (prevArg) {
-                  command->stdin_redirect = strdup(prevArg);
-                  int argc = command->num_sub_commands;
-                  lastSubCmd->argv[argc - 2] = NULL;
-                }
-                isRedirectInDone = 1;
-            }
-            prevArg = lastSubCmd->argv[i];  // track the previous argument
-        }
-        i -= 1;
+  struct SubCommand *sub_command = &command->sub_commands
+  [command->num_sub_commands - 1];
+
+  while (1) {
+    int argc = 0;
+    while (sub_command->argv[argc]) {
+      argc++;
     }
+
+    if (argc > 2 && !strcmp(sub_command->argv[argc - 2], ">")) {
+      command->stdout_redirect = sub_command->argv[argc - 1];
+      sub_command->argv[argc - 2] = NULL;
+    } 
+    else if (argc > 2 && !strcmp(sub_command->argv[argc - 2], "<")) {
+      command->stdin_redirect = sub_command->argv[argc - 1];
+      sub_command->argv[argc - 2] = NULL;
+    }
+    else if (argc > 1 && !strcmp(sub_command->argv[argc - 1], "&")) {
+      command->background = 1;
+      sub_command->argv[argc - 1] = NULL;
+    } else {
+      break;
+    }
+  }
 }
 
 void PrintCommand(struct Command *command) {
@@ -132,6 +128,8 @@ void PrintCommandResult(struct Command *command) {
     printf("[%d]\n", getpid());
   }
 
+  printf("here 1\n");
+
   int subCmdIdx = 0;
   while (subCmdIdx < command->num_sub_commands) {
 
@@ -139,33 +137,55 @@ void PrintCommandResult(struct Command *command) {
     int status;
     char **argv = command->sub_commands[subCmdIdx].argv;
     char **argv2;
+    int fds[2];
+    int err;
 
     if (command->num_sub_commands > 1) {
       if (subCmdIdx < command->num_sub_commands - 1) {
         argv = command->sub_commands[command->num_sub_commands - subCmdIdx - 1].argv;
         argv2 = command->sub_commands[command->num_sub_commands - subCmdIdx - 2].argv;
+        err = pipe(fds);
+        if (err == -1) {
+          perror("pipe");
+          return; 
+        }
       }
     }
-    // Should I do check for Pipe here?
-    int fds[2];
-    int err = pipe(fds);
-    if (err == -1) {
-      perror("pipe");
-      return; 
-    }
+
+    printf("here 2\n");
 
     pid = fork();
     if (pid == 0) {
       if (command->stdin_redirect) {
-        open(command->stdin_redirect, O_RDONLY);
+        // printf("Inside stdin_redirect\n");
+        // open(command->stdin_redirect, O_RDONLY);
+        int fd0;
+        if ((fd0 = open(command->stdin_redirect, O_RDONLY, 0)) < 0) {
+            perror("Couldn't open input file");
+            exit(0);
+        }           
+        // dup2() copies content of fdo in input of preceeding file
+        dup2(fd0, 0); // STDIN_FILENO here can be replaced by 0 
+        close(fd0); // necessar
       }
       if (command->stdout_redirect) {
-        open(command->stdout_redirect, O_WRONLY | O_CREAT | O_TRUNC);
+        // printf("Inside stdout_redirect\n");
+        // open(command->stdout_redirect, O_WRONLY | O_CREAT | O_TRUNC);
+        int fd1 ;
+        if ((fd1 = creat(command->stdout_redirect, 0644)) < 0) {
+            perror("Couldn't open the output file");
+            exit(0);
+        }           
+
+        dup2(fd1, STDOUT_FILENO); // 1 here can be replaced by STDOUT_FILENO
+        close(fd1);
       }
 
-      close(fds[1]);
-      close(0);
-      dup(fds[0]);
+      if (command->num_sub_commands > 1) {
+        close(fds[1]);
+        close(0);
+        dup(fds[0]);
+      }
 
       if (execvp(argv[0], argv) == -1) {
         printf("%s: Command not found\n", argv[0]);
@@ -175,15 +195,21 @@ void PrintCommandResult(struct Command *command) {
       // Error forking
       perror("lsh");
     } else {
+
+      printf("here 3\n");
       
       if (command->num_sub_commands > 1) {
         if (subCmdIdx < command->num_sub_commands - 1) {
           close(fds[0]);
           close(1);
           dup(fds[1]);
-          execvp(argv2[0], argv2);
+          if (execvp(argv2[0], argv2) == -1) {
+            printf("%s: Command not found\n", argv[0]);
+          }
         }
       }
+
+      printf("here 4\n");
 
       do {
         if (!command->background) {
@@ -191,6 +217,7 @@ void PrintCommandResult(struct Command *command) {
         }
       } while (!WIFEXITED(status) && !WIFSIGNALED(status));
     }
+    printf("here 5\n");
     subCmdIdx++;
 
   }
